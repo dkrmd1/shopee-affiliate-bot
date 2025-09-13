@@ -1,6 +1,13 @@
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.11"
+
+[phases.setup]
+nixPkgs = ["python311", "pip"]
+
 [phases.install]
 cmds = [
-    "pip install python-telegram-bot[webhooks]==20.7 requests"
+    "python -m pip install --upgrade pip",
+    "pip install python-telegram-bot[webhooks]==20.7 requests==2.31.0"
 ]
 
 [start]
