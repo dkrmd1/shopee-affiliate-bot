@@ -18,8 +18,10 @@ from telegram.ext import (
 # =====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN belum di-set di Railway Variables!")
 
 # =====================
 # 🗂 Database Setup
@@ -125,6 +127,28 @@ async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Format salah. Gunakan:\n/tambah Nama | Kategori | Harga1 | Harga2 | Link | Deskripsi | 0 | 1\n\nError: {e}")
 
 # =====================
+# 📤 Kirim ke Channel
+# =====================
+async def kirim_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return await update.message.reply_text("❌ Kamu bukan admin.")
+    
+    if not context.args:
+        return await update.message.reply_text("❌ Format salah. Gunakan: /kirim_channel {id_produk}")
+
+    produk_id = context.args[0]
+    cursor.execute("SELECT nama, kategori, harga_awal, harga_diskon, link, deskripsi FROM produk WHERE id = ?", (produk_id,))
+    produk = cursor.fetchone()
+    
+    if not produk:
+        return await update.message.reply_text("❌ Produk tidak ditemukan.")
+    
+    teks = f"🔥 {produk[0]} ({produk[1]})\n💸 Harga Awal: Rp {produk[2]}\n💰 Diskon: Rp {produk[3]}\n🔗 {produk[4]}\n📝 {produk[5]}"
+    
+    await context.bot.send_message(chat_id=CHANNEL_USERNAME, text=teks)
+    await update.message.reply_text(f"✅ Produk berhasil dikirim ke {CHANNEL_USERNAME}!")
+
+# =====================
 # 🚀 Main
 # =====================
 def main():
@@ -134,6 +158,7 @@ def main():
     # Command
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tambah", tambah))
+    app.add_handler(CommandHandler("kirim_channel", kirim_channel))
 
     # Button Callback
     app.add_handler(CallbackQueryHandler(button_handler))
