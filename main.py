@@ -27,6 +27,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Debug environment variables
+logger.info("🔍 Checking environment variables...")
+for key in ['BOT_TOKEN', 'ADMIN_ID', 'CHANNEL_ID', 'CHANNEL_USERNAME', 'PORT']:
+    value = os.getenv(key)
+    if key == 'BOT_TOKEN' and value:
+        logger.info(f"✅ {key}: {value[:20]}..." if value else f"❌ {key}: Not set")
+    else:
+        logger.info(f"✅ {key}: {value}" if value else f"❌ {key}: Not set")
+
 # Konfigurasi Environment Variables dengan validasi
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID_STR = os.getenv('ADMIN_ID', '0')
