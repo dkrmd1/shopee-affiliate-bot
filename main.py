@@ -195,414 +195,6 @@ Hai {nama_depan}! Siap hunting promo terbaik hari ini? 🔥
 🔔 **Notifikasi Otomatis:**
 • Promo harian jam 08.00 & 20.00
 • Flash sale alert real-time
-
-Ketik `/promo` untuk mulai belanja hemat! 🛒
-            """
-            
-            keyboard = [
-                [InlineKeyboardButton("🔥 Promo Hari Ini", callback_data="promo_hari_ini")],
-                [InlineKeyboardButton("⚡ Flash Sale", callback_data="flash_sale_aktif")],
-                [InlineKeyboardButton("📢 Channel Promo", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                pesan_welcome,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        else:
-            await query.edit_message_text(
-                f"❌ **Kamu belum subscribe channel kami.**\n\n"
-                f"Silakan subscribe dulu: {CHANNEL_USERNAME}\n"
-                f"Kemudian klik tombol '✅ Sudah Subscribe' lagi.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📢 Subscribe Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")],
-                    [InlineKeyboardButton("✅ Sudah Subscribe", callback_data="check_subscribe")]
-                ]),
-                parse_mode='Markdown'
-            )
-    
-    elif query.data == "promo_hari_ini":
-        # Redirect ke function promo_hari_ini
-        update.message = query.message
-        await promo_hari_ini(update, context)
-    
-    elif query.data == "flash_sale_aktif":
-        update.message = query.message
-        await flash_sale_aktif(update, context)
-    
-    elif query.data == "pilih_kategori":
-        if not await cek_subscribe_channel(user_id, context):
-            await query.edit_message_text(
-                f"🔒 Fitur ini hanya untuk subscriber channel.\n\nSubscribe dulu: {CHANNEL_USERNAME}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📢 Subscribe", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")],
-                    [InlineKeyboardButton("✅ Sudah Subscribe", callback_data="check_subscribe")]
-                ])
-            )
-            return
-        
-        keyboard = [
-            [InlineKeyboardButton("📱 Elektronik", callback_data="kat_elektronik")],
-            [InlineKeyboardButton("👕 Fashion Pria", callback_data="kat_fashion_pria")],
-            [InlineKeyboardButton("👗 Fashion Wanita", callback_data="kat_fashion_wanita")],
-            [InlineKeyboardButton("🏠 Rumah Tangga", callback_data="kat_rumah_tangga")],
-            [InlineKeyboardButton("🎮 Gaming", callback_data="kat_gaming")],
-            [InlineKeyboardButton("💄 Kecantikan", callback_data="kat_kecantikan")],
-            [InlineKeyboardButton("🔙 Kembali", callback_data="menu_utama")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🏷️ **Pilih Kategori Favorit:**\n\n"
-            "Pilih kategori untuk mendapat promo yang sesuai dengan minatmu!\n"
-            "Bot akan kirim notifikasi promo khusus kategori pilihanmu.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    elif query.data.startswith("kat_"):
-        # Handle kategori selection
-        kategori = query.data.replace("kat_", "").replace("_", " ").title()
-        
-        # Simpan preferensi kategori user
-        conn = sqlite3.connect('shopee_affiliate.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO preferensi_user (user_id, kategori)
-            VALUES (?, ?)
-        ''', (user_id, kategori))
-        conn.commit()
-        
-        # Ambil produk dari kategori tersebut
-        cursor.execute('''
-            SELECT nama, harga_asli, harga_promo, diskon_persen, link_affiliate
-            FROM produk 
-            WHERE aktif = 1 AND LOWER(kategori) LIKE LOWER(?)
-            ORDER BY diskon_persen DESC 
-            LIMIT 5
-        ''', (f"%{kategori}%",))
-        
-        produk_kategori = cursor.fetchall()
-        conn.close()
-        
-        if produk_kategori:
-            pesan = f"✅ **Kategori {kategori} berhasil dipilih!**\n\n"
-            pesan += f"🔥 **Promo {kategori} Terbaik:**\n\n"
-            
-            for nama, harga_asli, harga_promo, diskon, link in produk_kategori:
-                harga_asli_format = format_rupiah(harga_asli)
-                harga_promo_format = format_rupiah(harga_promo)
-                
-                pesan += f"📱 **{nama}**\n"
-                pesan += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}** ({diskon}%)\n"
-                pesan += f"[🛒 BELI]({link})\n\n"
-            
-            pesan += f"🔔 Kamu akan mendapat notifikasi khusus promo {kategori}!"
-        else:
-            pesan = f"✅ **Kategori {kategori} berhasil dipilih!**\n\n"
-            pesan += f"🔔 Kamu akan mendapat notifikasi khusus untuk kategori {kategori}.\n\n"
-            pesan += "Saat ini belum ada promo untuk kategori ini, tapi nanti akan ada notifikasi otomatis!"
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Pilih Kategori Lain", callback_data="pilih_kategori")],
-            [InlineKeyboardButton("🏠 Menu Utama", callback_data="menu_utama")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            pesan,
-            reply_markup=reply_markup,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-    
-    elif query.data == "aktifkan_notif":
-        # Aktifkan notifikasi user
-        conn = sqlite3.connect('shopee_affiliate.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE pengguna SET notifikasi_aktif = 1 WHERE user_id = ?
-        ''', (user_id,))
-        conn.commit()
-        conn.close()
-        
-        await query.edit_message_text(
-            "✅ **Notifikasi berhasil diaktifkan!**\n\n"
-            "🔔 Kamu akan mendapat:\n"
-            "• Flash sale alert real-time\n"
-            "• Promo harian jam 8 pagi & 8 malam\n"
-            "• Weekend special deals\n"
-            "• Voucher gratis notification\n\n"
-            f"📢 **Jangan lupa juga follow channel:** {CHANNEL_USERNAME}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 Menu Utama", callback_data="menu_utama")],
-                [InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]
-            ]),
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == "menu_utama":
-        # Kembali ke menu utama
-        pesan_menu = f"""
-🛍️ **Bot Promo Shopee**
-
-📱 **Menu Utama:**
-• `/promo` - Promo terbaru hari ini
-• `/flashsale` - Flash sale yang sedang berlangsung
-• `/kategori` - Pilih kategori favorit
-• `/voucher` - Kode voucher gratis
-• `/pengaturan` - Atur notifikasi & preferensi
-
-🔔 **Notifikasi Otomatis:**
-• Promo harian jam 08.00 & 20.00
-• Flash sale alert real-time
-• Weekend special deals
-
-Ketik `/promo` untuk mulai belanja hemat! 🛒
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🔥 Promo Hari Ini", callback_data="promo_hari_ini")],
-            [InlineKeyboardButton("⚡ Flash Sale", callback_data="flash_sale_aktif")],
-            [InlineKeyboardButton("🏷️ Kategori", callback_data="pilih_kategori")],
-            [InlineKeyboardButton("📢 Channel Promo", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            pesan_menu,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-
-# === SCHEDULED JOBS ===
-
-async def broadcast_harian_pagi(context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast promo harian pagi jam 8"""
-    conn = sqlite3.connect('shopee_affiliate.db')
-    cursor = conn.cursor()
-    
-    # Ambil top 5 promo hari ini
-    cursor.execute('''
-        SELECT nama, harga_asli, harga_promo, diskon_persen, link_affiliate
-        FROM produk 
-        WHERE aktif = 1 AND flash_sale = 0
-        ORDER BY diskon_persen DESC 
-        LIMIT 5
-    ''')
-    
-    produk_list = cursor.fetchall()
-    
-    # Kirim ke channel dulu
-    if produk_list:
-        pesan_channel = "🌅 **SELAMAT PAGI! PROMO TERBAIK HARI INI** 🌅\n\n"
-        pesan_channel += f"📅 *{datetime.now().strftime('%d %B %Y')}*\n\n"
-        
-        for i, (nama, harga_asli, harga_promo, diskon, link) in enumerate(produk_list, 1):
-            harga_asli_format = format_rupiah(harga_asli)
-            harga_promo_format = format_rupiah(harga_promo)
-            hemat = format_rupiah(harga_asli - harga_promo)
-            
-            pesan_channel += f"**{i}. {nama}**\n"
-            pesan_channel += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}**\n"
-            pesan_channel += f"🏷️ Hemat {diskon}% ({hemat})\n"
-            pesan_channel += f"[🛒 BELI SEKARANG]({link})\n\n"
-        
-        pesan_channel += f"👥 *Join bot untuk notifikasi promo:* @{BOT_TOKEN.split(':')[0]}\n"
-        pesan_channel += "⏰ *Update lagi jam 8 malam!*"
-        
-        # Kirim ke channel
-        try:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=pesan_channel,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logger.error(f"Error kirim ke channel: {e}")
-    
-    # Broadcast ke user bot yang aktif notifikasi
-    cursor.execute('''
-        SELECT user_id FROM pengguna 
-        WHERE subscribe_channel = 1 AND notifikasi_aktif = 1
-    ''')
-    users = cursor.fetchall()
-    conn.close()
-    
-    if not produk_list or not users:
-        return
-    
-    # Format pesan untuk user bot
-    pesan_bot = "🌅 **SELAMAT PAGI! PROMO PILIHAN HARI INI** 🌅\n\n"
-    
-    for i, (nama, harga_asli, harga_promo, diskon, link) in enumerate(produk_list, 1):
-        harga_asli_format = format_rupiah(harga_asli)
-        harga_promo_format = format_rupiah(harga_promo)
-        
-        pesan_bot += f"**{i}. {nama}**\n"
-        pesan_bot += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}** ({diskon}% OFF)\n"
-        pesan_bot += f"[🛒 BELI]({link})\n\n"
-    
-    pesan_bot += f"📢 **Lihat promo lengkap:** {CHANNEL_USERNAME}\n"
-    pesan_bot += "⏰ *Update lagi jam 8 malam!*"
-    
-    # Broadcast ke user dengan rate limiting
-    for (user_id,) in users:
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=pesan_bot,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-            await asyncio.sleep(0.05)
-        except:
-            continue
-
-async def broadcast_harian_malam(context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast promo malam jam 8"""
-    conn = sqlite3.connect('shopee_affiliate.db')
-    cursor = conn.cursor()
-    
-    # Ambil produk flash sale atau promo spesial malam
-    cursor.execute('''
-        SELECT nama, harga_asli, harga_promo, diskon_persen, link_affiliate, flash_sale
-        FROM produk 
-        WHERE aktif = 1 
-        ORDER BY flash_sale DESC, diskon_persen DESC 
-        LIMIT 5
-    ''')
-    
-    produk_list = cursor.fetchall()
-    
-    # Kirim ke channel
-    if produk_list:
-        pesan_channel = "🌃 **PROMO MALAM HARI - WEEKEND DEALS** 🌃\n\n"
-        
-        for nama, harga_asli, harga_promo, diskon, link, flash_sale in produk_list:
-            harga_asli_format = format_rupiah(harga_asli)
-            harga_promo_format = format_rupiah(harga_promo)
-            
-            if flash_sale:
-                pesan_channel += f"⚡ **FLASH SALE: {nama}**\n"
-            else:
-                pesan_channel += f"🔥 **{nama}**\n"
-            
-            pesan_channel += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}** ({diskon}%)\n"
-            pesan_channel += f"[🛒 BELI SEKARANG]({link})\n\n"
-        
-        pesan_channel += "🛌 *Selamat malam & happy shopping!*"
-        
-        try:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=pesan_channel,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logger.error(f"Error kirim ke channel: {e}")
-    
-    # Broadcast ke user
-    cursor.execute('''
-        SELECT user_id FROM pengguna 
-        WHERE subscribe_channel = 1 AND notifikasi_aktif = 1
-    ''')
-    users = cursor.fetchall()
-    conn.close()
-    
-    if not users:
-        return
-    
-    pesan_bot = "🌃 **PROMO MALAM HARI** 🌃\n\n"
-    pesan_bot += "Hay! Ada promo malam yang ga boleh dilewatin nih!\n\n"
-    
-    for nama, harga_asli, harga_promo, diskon, link, flash_sale in produk_list:
-        harga_asli_format = format_rupiah(harga_asli)
-        harga_promo_format = format_rupiah(harga_promo)
-        
-        if flash_sale:
-            pesan_bot += f"⚡ **{nama}** (Flash Sale)\n"
-        else:
-            pesan_bot += f"🔥 **{nama}**\n"
-        
-        pesan_bot += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}** ({diskon}%)\n"
-        pesan_bot += f"[🛒 BELI]({link})\n\n"
-    
-    pesan_bot += "🛌 *Selamat malam & happy shopping!*"
-    
-    # Broadcast dengan rate limiting
-    for (user_id,) in users:
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=pesan_bot,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-            await asyncio.sleep(0.05)
-        except:
-            continue
-
-def main():
-    """Main function untuk menjalankan bot"""
-    # Initialize bot
-    bot = ShopeeAffiliateBot()
-    
-    # Create application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # User Commands
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("promo", promo_hari_ini))
-    application.add_handler(CommandHandler("flashsale", flash_sale_aktif))
-    
-    # Admin Commands
-    application.add_handler(CommandHandler("tambah", tambah_produk))
-    application.add_handler(CommandHandler("lihat_produk", lihat_produk))
-    application.add_handler(CommandHandler("kirim_channel", kirim_ke_channel))
-    application.add_handler(CommandHandler("broadcast", broadcast_produk))
-    
-    # Callback handlers
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Scheduled jobs
-    job_queue = application.job_queue
-    
-    # Broadcast harian
-    job_queue.run_daily(
-        broadcast_harian_pagi, 
-        time=datetime.strptime("08:00", "%H:%M").time(),
-        name="broadcast_pagi"
-    )
-    job_queue.run_daily(
-        broadcast_harian_malam, 
-        time=datetime.strptime("20:00", "%H:%M").time(),
-        name="broadcast_malam"
-    )
-    
-    # Start bot dengan webhook untuk Railway
-    port = int(os.environ.get('PORT', 8080))
-    app_name = os.environ.get('RAILWAY_STATIC_URL', 'localhost')
-    
-    if app_name != 'localhost':
-        # Production mode dengan webhook
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=BOT_TOKEN,
-            webhook_url=f"https://{app_name}/{BOT_TOKEN}"
-        )
-    else:
-        # Development mode dengan polling
-        application.run_polling(drop_pending_updates=True)
-
-if __name__ == '__main__':
-    main().00 & 20.00
-• Flash sale alert real-time
 • Weekend special deals
 
 Ketik `/promo` untuk mulai belanja hemat! 🛒
@@ -679,79 +271,6 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     pesan += f"📢 **Lihat lebih banyak promo di channel:** {CHANNEL_USERNAME}\n"
     pesan += "⏰ *Update setiap hari jam 8 pagi & 8 malam*"
-    
-    await update.message.reply_text(
-        pesan, 
-        parse_mode='Markdown', 
-        disable_web_page_preview=True
-    )
-
-async def flash_sale_aktif(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler untuk flash sale"""
-    user_id = update.effective_user.id
-    
-    if not await cek_subscribe_channel(user_id, context):
-        await minta_subscribe(update, context)
-        return
-    
-    await update_user_activity(user_id)
-    
-    conn = sqlite3.connect('shopee_affiliate.db')
-    cursor = conn.cursor()
-    
-    # Ambil produk flash sale aktif
-    cursor.execute('''
-        SELECT nama, harga_asli, harga_promo, diskon_persen, 
-               link_affiliate, deskripsi
-        FROM produk 
-        WHERE aktif = 1 AND flash_sale = 1
-        ORDER BY diskon_persen DESC 
-        LIMIT 6
-    ''')
-    
-    flash_sale_list = cursor.fetchall()
-    conn.close()
-    
-    if not flash_sale_list:
-        pesan_kosong = f"""
-⚡ **FLASH SALE SHOPEE** ⚡
-
-🤔 Tidak ada flash sale saat ini.
-
-🔔 **Aktifkan notifikasi** untuk mendapat alert flash sale:
-• Flash sale biasanya dimulai jam 12.00, 18.00, dan 20.00
-• Subscribe channel untuk update real-time
-
-📢 **Channel:** {CHANNEL_USERNAME}
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🔔 Aktifkan Notifikasi", callback_data="aktifkan_notif")],
-            [InlineKeyboardButton("📢 Channel Promo", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            pesan_kosong,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return
-    
-    pesan = "⚡ **FLASH SALE SHOPEE** ⚡\n\n"
-    pesan += "🔥 *Promo terbatas waktu - Buruan sebelum kehabisan!*\n\n"
-    
-    for nama, harga_asli, harga_promo, diskon, link, desc in flash_sale_list:
-        harga_asli_format = format_rupiah(harga_asli)
-        harga_promo_format = format_rupiah(harga_promo)
-        
-        pesan += f"🔥 **{nama}**\n"
-        pesan += f"💰 ~~{harga_asli_format}~~ → **{harga_promo_format}**\n"
-        pesan += f"🏷️ **HEMAT {diskon}%**\n"
-        pesan += f"[🛒 BELI SEKARANG]({link})\n\n"
-    
-    pesan += "⚠️ *Stock terbatas! Jangan sampai terlewat*\n"
-    pesan += f"📢 **Update flash sale real-time:** {CHANNEL_USERNAME}"
     
     await update.message.reply_text(
         pesan, 
@@ -949,7 +468,7 @@ async def kirim_ke_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 [🛒 BELI SEKARANG]({link})
 
-👥 *Join bot untuk promo lainnya:* @{BOT_TOKEN.split(':')[0]}
+👥 *Join bot untuk promo lainnya:* @Promosi_shopeeBot
             """
         
         # Kirim ke channel
@@ -1054,51 +573,6 @@ async def broadcast_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-async def lihat_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lihat daftar semua produk - Admin only"""
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Command ini hanya untuk admin!")
-        return
-    
-    conn = sqlite3.connect('shopee_affiliate.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, nama, kategori, diskon_persen, aktif, flash_sale, stok_terbatas
-        FROM produk 
-        ORDER BY dibuat_pada DESC 
-        LIMIT 15
-    ''')
-    
-    produk_list = cursor.fetchall()
-    conn.close()
-    
-    if not produk_list:
-        await update.message.reply_text("📦 Belum ada produk yang ditambahkan.")
-        return
-    
-    pesan = "📦 **DAFTAR PRODUK**\n\n"
-    
-    for pid, nama, kategori, diskon, aktif, flash_sale, stok_terbatas in produk_list:
-        status_icon = "✅" if aktif else "❌"
-        flash_icon = "⚡" if flash_sale else ""
-        stok_icon = "⚠️" if stok_terbatas else ""
-        
-        pesan += f"{status_icon} **{pid}.** {nama} {flash_icon} {stok_icon}\n"
-        pesan += f"🏷️ {kategori} | 🔥 {diskon}%\n\n"
-    
-    pesan += """
-**Command untuk manage produk:**
-• `/toggle {id}` - Aktif/nonaktif produk
-• `/hapus {id}` - Hapus produk
-• `/kirim_channel {id}` - Kirim ke channel
-• `/broadcast {id}` - Broadcast ke user
-
-**Legend:**
-✅ Aktif | ❌ Nonaktif | ⚡ Flash Sale | ⚠️ Stok Terbatas
-    """
-    
-    await update.message.reply_text(pesan, parse_mode='Markdown')
-
 # === CALLBACK HANDLERS ===
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1135,4 +609,76 @@ Sekarang kamu bisa akses semua fitur bot.
 • `/kategori` - Pilih kategori favorit
 
 🔔 **Notifikasi Otomatis:**
-• Promo harian jam 08
+• Promo harian jam 08.00 & 20.00
+• Flash sale alert real-time
+
+Ketik `/promo` untuk mulai belanja hemat! 🛒
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("🔥 Promo Hari Ini", callback_data="promo_hari_ini")],
+                [InlineKeyboardButton("⚡ Flash Sale", callback_data="flash_sale_aktif")],
+                [InlineKeyboardButton("📢 Channel Promo", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                pesan_welcome,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ **Kamu belum subscribe channel kami.**\n\n"
+                f"Silakan subscribe dulu: {CHANNEL_USERNAME}\n"
+                f"Kemudian klik tombol '✅ Sudah Subscribe' lagi.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📢 Subscribe Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")],
+                    [InlineKeyboardButton("✅ Sudah Subscribe", callback_data="check_subscribe")]
+                ]),
+                parse_mode='Markdown'
+            )
+    
+    elif query.data == "promo_hari_ini":
+        # Redirect ke function promo_hari_ini
+        update.message = query.message
+        await promo_hari_ini(update, context)
+
+def main():
+    """Main function untuk menjalankan bot"""
+    # Initialize bot
+    bot = ShopeeAffiliateBot()
+    
+    # Create application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # User Commands
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("promo", promo_hari_ini))
+    
+    # Admin Commands
+    application.add_handler(CommandHandler("tambah", tambah_produk))
+    application.add_handler(CommandHandler("kirim_channel", kirim_ke_channel))
+    application.add_handler(CommandHandler("broadcast", broadcast_produk))
+    
+    # Callback handlers
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    
+    # Start bot dengan webhook untuk Railway
+    port = int(os.environ.get('PORT', 8080))
+    app_name = os.environ.get('RAILWAY_STATIC_URL', 'localhost')
+    
+    if app_name != 'localhost':
+        # Production mode dengan webhook
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=BOT_TOKEN,
+            webhook_url=f"https://{app_name}/{BOT_TOKEN}"
+        )
+    else:
+        # Development mode dengan polling
+        application.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
