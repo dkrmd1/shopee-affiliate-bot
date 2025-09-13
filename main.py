@@ -1,11 +1,15 @@
+# main.py
 import logging
 import asyncio
 from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- Konfigurasi Bot ---
-TELEGRAM_BOT_TOKEN = "ISI_TOKEN_BOT_KAMU"   # ganti dengan token bot kamu
-CHANNEL_USERNAME = "@promoshopee22a"        # username channel publik
+# --- Import config ---
+from config import get_config, print_config
+
+config = get_config()
+TELEGRAM_BOT_TOKEN = config['BOT_TOKEN']
+CHANNEL_USERNAME = config['CHANNEL_USERNAME']
 
 # --- Logging ---
 logging.basicConfig(
@@ -72,6 +76,8 @@ async def blast_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Main ---
 async def main():
+    print_config()  # Debugging, biar tahu config ke-load
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Handler perintah
