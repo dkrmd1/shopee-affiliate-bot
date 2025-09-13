@@ -393,7 +393,7 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === ADMIN COMMANDS ===
 
 async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command admin untuk menambah produk - UPDATED with image support"""
+    """Command admin untuk menambah produk - UPDATED with better validation"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Command ini hanya untuk admin!")
         return
@@ -402,23 +402,31 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contoh_format = """
 📝 **Format Tambah Produk (UPDATED):**
 
-`/tambah iPhone 15 Pro | Elektronik | 15999000 | 12999000 | https://shopee.co.id/xxx?af_siteid=123 | Garangan resmi iBox 1 tahun | https://image.url/iphone.jpg | 1 | 1`
+`/tambah iPhone 15 Pro | Elektronik | 15999000 | 12999000 | https://shopee.co.id/product/123456789 | Garansi resmi iBox 1 tahun | https://cf.shopee.co.id/file/iphone15.jpg | 1 | 1`
 
 **Keterangan:**
 1. Nama Produk
 2. Kategori  
-3. Harga Asli
-4. Harga Promo
-5. Link Affiliate
+3. Harga Asli (angka saja)
+4. Harga Promo (angka saja)
+5. Link Affiliate Shopee
 6. Deskripsi
-7. **URL Gambar** (BARU!)
+7. **URL Gambar** (https://... .jpg/.png/.gif)
 8. Stok Terbatas (0/1)
 9. Flash Sale (0/1)
 
-**Pisahkan dengan tanda | (pipe)**
+**CONTOH TANPA GAMBAR:**
+`/tambah Sepatu Nike Air Max | Fashion | 1500000 | 999000 | https://shopee.co.id/product/987654321 | Sepatu running original | - | 1 | 0`
 
-**CONTOH dengan GAMBAR:**
-`/tambah Sepatu Nike | Fashion | 1500000 | 999000 | https://shopee.co.id/xxx | Sepatu running original | https://example.com/sepatu.jpg | 1 | 0`
+**TIPS:**
+- Gunakan **https://** untuk semua link
+- URL gambar harus berakhir **.jpg**, **.png**, atau **.gif**
+- Tulis **-** jika tidak ada gambar
+- Pisahkan dengan **|** (pipe)
+
+**Link Affiliate Shopee yang valid:**
+- `https://shopee.co.id/product/123456789`
+- `https://s.shopee.co.id/xxxxx`
         """
         await update.message.reply_text(contoh_format, parse_mode='Markdown')
         return
@@ -426,23 +434,43 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data_produk = ' '.join(context.args).split('|')
         
-        if len(data_produk) < 7:  # Updated minimum requirement
-            raise ValueError("Data tidak lengkap! Minimal 7 kolom (termasuk URL gambar).")
+        if len(data_produk) < 7:
+            raise ValueError("Data tidak lengkap! Minimal 7 kolom.")
         
         nama = data_produk[0].strip()
         kategori = data_produk[1].strip()
-        harga_asli = int(data_produk[2].strip())
-        harga_promo = int(data_produk[3].strip())
+        
+        # Validasi harga
+        try:
+            harga_asli = int(data_produk[2].strip())
+            harga_promo = int(data_produk[3].strip())
+        except ValueError:
+            raise ValueError("Harga harus berupa angka! Contoh: 1500000")
+        
+        if harga_asli <= 0 or harga_promo <= 0:
+            raise ValueError("Harga harus lebih dari 0!")
+        
+        if harga_promo >= harga_asli:
+            raise ValueError("Harga promo harus lebih kecil dari harga asli!")
+        
         link_affiliate = data_produk[4].strip()
         deskripsi = data_produk[5].strip()
-        gambar_url = data_produk[6].strip() if len(data_produk) > 6 and data_produk[6].strip() else None
+        
+        # Handle gambar URL
+        gambar_input = data_produk[6].strip() if len(data_produk) > 6 else ""
+        gambar_url = None if gambar_input in ['-', '', 'null', 'None'] else gambar_input
+        
         stok_terbatas = bool(int(data_produk[7].strip())) if len(data_produk) > 7 else False
         flash_sale = bool(int(data_produk[8].strip())) if len(data_produk) > 8 else False
+        
+        # Validasi link affiliate
+        if not link_affiliate.startswith(('http://', 'https://')):
+            link_affiliate = 'https://' + link_affiliate
         
         # Hitung diskon
         diskon_persen = hitung_diskon(harga_asli, harga_promo)
         
-        # Simpan ke database - UPDATED with gambar_url
+        # Simpan ke database
         conn = sqlite3.connect('shopee_affiliate.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('''
@@ -457,7 +485,7 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
-        # Auto blast ke channel
+        # Auto blast ke channel dengan error handling
         produk_data = {
             'nama': nama,
             'harga_asli': harga_asli,
@@ -469,6 +497,8 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'stok_terbatas': stok_terbatas,
             'flash_sale': flash_sale
         }
+        
+        await update.message.reply_text("⏳ **Menyimpan produk dan mengirim ke channel...**", parse_mode='Markdown')
         
         blast_success = await kirim_ke_channel(context, produk_data)
         
@@ -484,7 +514,7 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🏷️ **Kategori:** {kategori}
 💰 **Harga:** ~~{harga_asli_format}~~ → **{harga_promo_format}**
 🔥 **Diskon:** {diskon_persen}%
-🖼️ **Gambar:** {'Ada' if gambar_url else 'Tidak ada'}
+🖼️ **Gambar:** {'✅ Ada' if gambar_url else '❌ Tidak ada'}
 ⚡ **Flash Sale:** {'Ya' if flash_sale else 'Tidak'}
 ⚠️ **Stok Terbatas:** {'Ya' if stok_terbatas else 'Tidak'}
 📢 **Blast ke Channel:** {'✅ Berhasil' if blast_success else '❌ Gagal'}
@@ -493,6 +523,14 @@ Gunakan `/promo` untuk melihat semua produk.
         """
         
         await update.message.reply_text(pesan_sukses, parse_mode='Markdown')
+        
+        # Jika blast gagal, berikan info tambahan
+        if not blast_success:
+            await update.message.reply_text(
+                "⚠️ **Catatan:** Produk sudah tersimpan tapi gagal dikirim ke channel.\n"
+                "Gunakan `/blast` untuk mencoba kirim ulang ke channel.",
+                parse_mode='Markdown'
+            )
         
     except Exception as e:
         logger.error(f"Error in tambah_produk: {e}")
@@ -693,6 +731,37 @@ def main():
     try:
         logger.info("🚀 Starting Shopee Affiliate Bot...")
         
+        # FORCE DELETE WEBHOOK FIRST - SOLUSI UNTUK CONFLICT ERROR
+        import requests
+        import time
+        
+        logger.info("🔄 Force deleting webhook...")
+        try:
+            # Method 1: Via requests
+            webhook_delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+            response = requests.post(webhook_delete_url, json={"drop_pending_updates": True}, timeout=10)
+            logger.info(f"Webhook delete response: {response.text}")
+            
+            # Method 2: Via telegram bot API
+            from telegram import Bot
+            temp_bot = Bot(token=BOT_TOKEN)
+            import asyncio
+            async def force_delete():
+                try:
+                    await temp_bot.delete_webhook(drop_pending_updates=True)
+                    logger.info("✅ Webhook deleted via Bot API")
+                except Exception as e:
+                    logger.warning(f"Bot API delete failed: {e}")
+            
+            asyncio.run(force_delete())
+            
+            # Wait for cleanup
+            logger.info("⏳ Waiting 5 seconds for cleanup...")
+            time.sleep(5)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Could not force delete webhook: {e}")
+        
         # Check if another instance is running by creating a lock file
         lock_file = 'bot.lock'
         if os.path.exists(lock_file):
@@ -716,17 +785,6 @@ def main():
         logger.info("🔧 Building Telegram application...")
         application = Application.builder().token(BOT_TOKEN).build()
         logger.info("✅ Telegram application built successfully")
-        
-        # Force delete webhook first to avoid conflicts
-        try:
-            logger.info("🔄 Deleting webhook to ensure clean state...")
-            import asyncio
-            async def delete_webhook():
-                await application.bot.delete_webhook(drop_pending_updates=True)
-            asyncio.run(delete_webhook())
-            logger.info("✅ Webhook deleted successfully")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not delete webhook: {e}")
         
         # Add error handler
         application.add_error_handler(error_handler)
@@ -755,33 +813,39 @@ def main():
         logger.info(f"🌐 Port: {port}")
         logger.info(f"🌐 App URL: {app_name}")
         
-        # Use webhook if Railway URL is available, otherwise use polling
-        if app_name and not app_name.startswith('localhost'):
+        # ALWAYS USE POLLING - LEBIH STABIL
+        logger.info("🔄 Starting polling mode with conflict resolution...")
+        
+        # Retry mechanism untuk polling
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                logger.info("🌐 Starting webhook mode")
-                webhook_url = f"https://{app_name}/webhook"
-                logger.info(f"📡 Webhook URL: {webhook_url}")
-                
-                application.run_webhook(
-                    listen="0.0.0.0",
-                    port=port,
-                    secret_token="your-secret-token-here",
-                    webhook_url=webhook_url,
-                    drop_pending_updates=True
-                )
-            except Exception as e:
-                logger.error(f"❌ Webhook failed: {e}, falling back to polling")
-                logger.info("🔄 Starting polling mode (fallback)")
+                logger.info(f"📡 Polling attempt {attempt + 1}/{max_retries}")
                 application.run_polling(
                     drop_pending_updates=True,
-                    allowed_updates=['message', 'callback_query']
+                    allowed_updates=['message', 'callback_query'],
+                    poll_interval=2.0,  # 2 seconds interval
+                    timeout=10  # 10 seconds timeout
                 )
-        else:
-            logger.info("🔄 Starting polling mode")
-            application.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=['message', 'callback_query']
-            )
+                break  # If successful, break the retry loop
+                
+            except Exception as e:
+                logger.error(f"❌ Polling attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 10  # 10, 20, 30 seconds
+                    logger.info(f"⏳ Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                    
+                    # Try force delete webhook again
+                    try:
+                        webhook_delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+                        requests.post(webhook_delete_url, json={"drop_pending_updates": True}, timeout=5)
+                        logger.info("🔄 Webhook deleted during retry")
+                    except:
+                        pass
+                else:
+                    logger.error("💥 All polling attempts failed!")
+                    raise e
             
     except Exception as e:
         logger.error(f"💥 Critical error starting bot: {e}")
