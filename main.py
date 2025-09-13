@@ -693,14 +693,40 @@ def main():
     try:
         logger.info("🚀 Starting Shopee Affiliate Bot...")
         
+        # Check if another instance is running by creating a lock file
+        lock_file = 'bot.lock'
+        if os.path.exists(lock_file):
+            logger.warning("⚠️ Lock file exists, removing it...")
+            try:
+                os.remove(lock_file)
+                logger.info("🗑️ Old lock file removed")
+            except Exception as e:
+                logger.error(f"Failed to remove lock file: {e}")
+        
+        # Create lock file
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        logger.info(f"🔒 Lock file created with PID: {os.getpid()}")
+        
         # Initialize bot
         bot = ShopeeAffiliateBot()
         logger.info("✅ Bot class initialized")
         
-        # Create application
+        # Create application with better error handling
         logger.info("🔧 Building Telegram application...")
         application = Application.builder().token(BOT_TOKEN).build()
         logger.info("✅ Telegram application built successfully")
+        
+        # Force delete webhook first to avoid conflicts
+        try:
+            logger.info("🔄 Deleting webhook to ensure clean state...")
+            import asyncio
+            async def delete_webhook():
+                await application.bot.delete_webhook(drop_pending_updates=True)
+            asyncio.run(delete_webhook())
+            logger.info("✅ Webhook deleted successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not delete webhook: {e}")
         
         # Add error handler
         application.add_error_handler(error_handler)
@@ -722,20 +748,59 @@ def main():
         
         logger.info("✅ All handlers registered")
         
-        # Start bot
+        # Start bot with retry mechanism
         port = int(os.environ.get('PORT', 8080))
         app_name = os.environ.get('RAILWAY_STATIC_URL')
         
         logger.info(f"🌐 Port: {port}")
         logger.info(f"🌐 App URL: {app_name}")
         
-        # Always use polling for now (simpler and more reliable)
-        logger.info("🔄 Starting polling mode")
-        application.run_polling(drop_pending_updates=True)
+        # Use webhook if Railway URL is available, otherwise use polling
+        if app_name and not app_name.startswith('localhost'):
+            try:
+                logger.info("🌐 Starting webhook mode")
+                webhook_url = f"https://{app_name}/webhook"
+                logger.info(f"📡 Webhook URL: {webhook_url}")
+                
+                application.run_webhook(
+                    listen="0.0.0.0",
+                    port=port,
+                    secret_token="your-secret-token-here",
+                    webhook_url=webhook_url,
+                    drop_pending_updates=True
+                )
+            except Exception as e:
+                logger.error(f"❌ Webhook failed: {e}, falling back to polling")
+                logger.info("🔄 Starting polling mode (fallback)")
+                application.run_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=['message', 'callback_query']
+                )
+        else:
+            logger.info("🔄 Starting polling mode")
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=['message', 'callback_query']
+            )
             
     except Exception as e:
         logger.error(f"💥 Critical error starting bot: {e}")
+        # Clean up lock file
+        try:
+            if os.path.exists('bot.lock'):
+                os.remove('bot.lock')
+                logger.info("🗑️ Lock file cleaned up")
+        except:
+            pass
         raise e
+    finally:
+        # Clean up lock file on exit
+        try:
+            if os.path.exists('bot.lock'):
+                os.remove('bot.lock')
+                logger.info("🗑️ Lock file cleaned up on exit")
+        except:
+            pass
 
 if __name__ == '__main__':
     main()
