@@ -1,3 +1,5 @@
-python-telegram-bot==20.7
-httpx==0.25.0
-sqlite3
+python-telegram-bot==20.7   # library utama bot Telegram
+httpx==0.25.0               # untuk HTTP request async/fast
+requests==2.31.0            # untuk HTTP request biasa
+python-dotenv==1.0.0        # load .env (TOKEN, API key, dsb)
+schedule==1.2.1             # jadwal otomatis (misalnya blast harian)
