@@ -1,68 +1,98 @@
 import os
 import logging
-import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-from apscheduler.schedulers.background import BackgroundScheduler
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    ContextTypes
+)
 
-# Logging
+# 🔑 Ambil token & config dari environment Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@promoshopee22a")
+
+# 🚨 Logging biar gampang debug
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Ambil variabel dari Railway Variables
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")  # contoh: "@promoshopee22a"
 
-# === Command Start ===
+# ==========================
+# MENU UTAMA
+# ==========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    # Tombol menu
     keyboard = [
-        [InlineKeyboardButton("📢 Promo Terbaru", callback_data="promo")],
-        [InlineKeyboardButton("ℹ️ Tentang Bot", callback_data="about")],
+        [InlineKeyboardButton("🔥 Promo Hari Ini", callback_data="promo")],
+        [InlineKeyboardButton("⚡ Flash Sale", callback_data="flashsale")],
+        [InlineKeyboardButton("📂 Pilih Kategori", callback_data="kategori")],
+        [InlineKeyboardButton("ℹ️ Bantuan", callback_data="bantuan")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "Halo 👋\nSelamat datang di Bot Promo Shopee!\n\nPilih menu di bawah:",
-        reply_markup=reply_markup,
+        f"Halo {user.first_name}! 👋\n"
+        f"Selamat datang di Bot Promo Shopee!\n\n"
+        f"📢 Pastikan sudah join channel {CHANNEL_ID} untuk akses penuh.",
+        reply_markup=reply_markup
     )
 
-# === Callback Button ===
+
+# ==========================
+# HANDLER PILIHAN MENU
+# ==========================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     if query.data == "promo":
-        await query.edit_message_text("🔥 Promo terbaru ada di channel kami: https://t.me/promoshopee22a")
-    elif query.data == "about":
-        await query.edit_message_text("🤖 Bot ini otomatis mengirim promo ke channel Shopee!")
+        await query.edit_message_text("🔥 Promo hari ini: \n1. Produk A\n2. Produk B")
+    elif query.data == "flashsale":
+        await query.edit_message_text("⚡ Flash Sale aktif sekarang!")
+    elif query.data == "kategori":
+        # Submenu kategori
+        kategori_keyboard = [
+            [InlineKeyboardButton("📱 Elektronik", callback_data="cat_elektronik")],
+            [InlineKeyboardButton("👕 Fashion", callback_data="cat_fashion")],
+            [InlineKeyboardButton("🏠 Rumah Tangga", callback_data="cat_rumah")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="back_main")]
+        ]
+        await query.edit_message_text(
+            "📂 Pilih kategori favorit kamu:",
+            reply_markup=InlineKeyboardMarkup(kategori_keyboard)
+        )
+    elif query.data == "bantuan":
+        await query.edit_message_text("ℹ️ Gunakan menu untuk lihat promo & flash sale.")
+    elif query.data == "back_main":
+        await start(update, context)
+    else:
+        await query.edit_message_text("✅ Kategori tersimpan! Nanti promo akan sesuai pilihanmu.")
 
-# === Blast ke Channel ===
-def blast_message():
-    try:
-        text = "🚀 Promo baru tersedia! Cek sekarang di https://shopee.co.id"
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        res = requests.post(url, data={"chat_id": CHANNEL_ID, "text": text})
-        if res.status_code == 200:
-            logger.info("✅ Blast terkirim ke channel")
-        else:
-            logger.error(f"❌ Gagal kirim blast: {res.text}")
-    except Exception as e:
-        logger.error(f"❌ Error blast: {e}")
 
+# ==========================
+# MAIN FUNCTION
+# ==========================
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    if not BOT_TOKEN:
+        raise ValueError("❌ BOT_TOKEN belum di-set di Railway Variables!")
 
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Command
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Scheduler untuk blast otomatis
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(blast_message, "interval", hours=1)  # setiap 1 jam
-    scheduler.start()
+    # Callback Button
+    app.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("🤖 Bot berjalan...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
