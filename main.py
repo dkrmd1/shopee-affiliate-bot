@@ -1,354 +1,241 @@
-#!/usr/bin/env python3
-# bot.py
-import os
-import asyncio
 import logging
 import sqlite3
-from datetime import datetime
-import pytz
-from functools import wraps
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-
-from telegram import Update, ChatMemberStatus, InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+import os
+from datetime import datetime, time
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
+)
+from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    filters, ContextTypes
 )
 
-# ------------- CONFIG -------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")           # token BotFather
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))  # telegram id admin (angka)
-CHANNEL_ID = os.environ.get("CHANNEL_ID")        # contoh: @namachannel atau -100xxxx
-CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME")  # @namachannel
-TIMEZONE = "Asia/Jakarta"
-DB_PATH = os.environ.get("DB_PATH", "botdata.db")
-# -----------------------------------
+# --- Konfigurasi dari ENV ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ISI_TOKEN_BOT")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@promoshopee22a")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@promoshopee22a")
 
-# Logging
+# --- Logging ---
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ---------- DATABASE HELPERS ----------
+# --- Database ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect("db.sqlite3")
     cur = conn.cursor()
-    # users: store chat_id, first_name, subscribed flag, fav_category
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER UNIQUE,
-            username TEXT,
-            first_name TEXT,
-            subscribed INTEGER DEFAULT 0,
-            fav_category TEXT
-        )
-        """
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS produk (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nama TEXT,
+        kategori TEXT,
+        harga_awal INTEGER,
+        harga_diskon INTEGER,
+        link TEXT,
+        deskripsi TEXT,
+        flashsale INTEGER DEFAULT 0,
+        aktif INTEGER DEFAULT 1
     )
-    # products: admin adds products
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            category TEXT,
-            price_old INTEGER,
-            price_new INTEGER,
-            url TEXT,
-            description TEXT,
-            is_flashsale INTEGER DEFAULT 0,
-            auto_post INTEGER DEFAULT 1,
-            created_at TEXT
-        )
-        """
-    )
+    """)
     conn.commit()
-    return conn
+    conn.close()
 
-DB = init_db()
-DB_LOCK = asyncio.Lock()
-
-async def db_execute(query, params=(), fetch=False):
-    async with DB_LOCK:
-        def _run():
-            cur = DB.cursor()
-            cur.execute(query, params)
-            if fetch:
-                res = cur.fetchall()
-            else:
-                res = None
-            DB.commit()
-            return res
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _run)
-
-# ---------- UTIL ----------
-def admin_only(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id if update.effective_user else None
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("❌ Perintah ini hanya untuk admin.")
-            return
-        return await func(update, context)
-    return wrapper
-
-async def ensure_user(chat_id, user):
-    # insert or update user basic info
-    await db_execute(
-        """
-        INSERT INTO users (chat_id, username, first_name)
-        VALUES (?, ?, ?)
-        ON CONFLICT(chat_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name
-        """,
-        (chat_id, user.username or "", user.first_name or ""),
+# --- Format Produk ---
+def format_produk(p):
+    return (
+        f"🛍️ <b>{p[1]}</b>\n"
+        f"📂 Kategori: {p[2]}\n"
+        f"💰 Harga Awal: Rp {p[3]:,}\n"
+        f"🔥 Harga Promo: Rp {p[4]:,}\n"
+        f"📌 Deskripsi: {p[6]}\n\n"
+        f"👉 <a href='{p[5]}'>Beli Sekarang</a>"
     )
 
-async def check_subscribed(bot, user_chat_id):
-    # return True if user is member of the channel
+# --- Cek Subscribe ---
+async def check_subscribe(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_chat_id)
-        status = member.status
-        return status not in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED)
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in [
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER
+        ]
     except Exception as e:
-        logger.warning("check_subscribed error: %s", e)
-        return False  # if fail, treat as not subscribed
+        logger.error(f"Check subscribe error: {e}")
+        return False
 
-def format_product_row(row):
-    # row: (id,title,category,price_old,price_new,url,description,is_flashsale,auto_post,created_at)
-    id_, title, category, price_old, price_new, url, description, is_flashsale, auto_post, created_at = row
-    price_old_str = f"Rp {price_old:,}" if price_old else "-"
-    price_new_str = f"Rp {price_new:,}" if price_new else "-"
-    fs = "⚡ FLASH SALE" if is_flashsale else ""
-    s = f"*{title}* {fs}\nKategori: `{category}`\nHarga: ~~{price_old_str}~~ ➜ *{price_new_str}*\n{description}\n🔗 [Beli di Shopee]({url})\nID: `{id_}`\n"
-    return s
+# --- Command: Start ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await check_subscribe(user_id, context):
+        keyboard = [[InlineKeyboardButton("Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")]]
+        await update.message.reply_text(
+            "⚠️ Kamu harus join channel dulu untuk pakai bot ini!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
 
-# ---------- TELEGRAM HANDLERS ----------
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    await ensure_user(chat_id, user)
-    # check subscribe
-    is_sub = await check_subscribed(context.bot, chat_id)
-    await db_execute("UPDATE users SET subscribed = ? WHERE chat_id = ?", (1 if is_sub else 0, chat_id))
-    kb = [
-        [InlineKeyboardButton("Gabung Channel", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")],
-        [InlineKeyboardButton("Cek Promo Hari Ini", callback_data="promo_now")],
-    ]
-    txt = (
-        f"Halo, {user.first_name} 👋\n\n"
-        "Selamat datang di Bot Promo Shopee Affiliate.\n\n"
-        "Sebelum lanjut, pastikan kamu sudah bergabung dengan channel kami untuk bisa melihat promo penuh."
+    await update.message.reply_text(
+        "Selamat datang di Shopee Affiliate Bot 🛍️\n\n"
+        "Gunakan /promo untuk lihat promo hari ini, /flashsale untuk cek flash sale."
     )
-    await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def kategori_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # show categories from products table
-    rows = await db_execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL", fetch=True)
-    categories = [r[0] for r in rows] if rows else []
-    if not categories:
-        await update.message.reply_text("Belum ada kategori. Admin belum menambahkan produk.")
+# --- Command: Tambah Produk (Admin) ---
+async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
-    kb = [[InlineKeyboardButton(cat, callback_data=f"setcat|{cat}")] for cat in categories]
-    await update.message.reply_text("Pilih kategori favoritmu:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def promo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # show products for today (simple: newest 10)
-    rows = await db_execute("SELECT * FROM products ORDER BY created_at DESC LIMIT 10", fetch=True)
-    if not rows:
-        await update.message.reply_text("Belum ada promo hari ini.")
-        return
-    for row in rows:
-        txt = format_product_row(row)
-        await update.message.reply_text(txt, parse_mode="Markdown", disable_web_page_preview=False)
-
-async def flashsale_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = await db_execute("SELECT * FROM products WHERE is_flashsale=1 ORDER BY created_at DESC", fetch=True)
-    if not rows:
-        await update.message.reply_text("Tidak ada flash sale aktif saat ini.")
-        return
-    for row in rows:
-        txt = format_product_row(row)
-        await update.message.reply_text(txt, parse_mode="Markdown", disable_web_page_preview=False)
-
-# ----------- ADMIN COMMANDS ------------
-@admin_only
-async def cmd_tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Expect: /tambah Title | Category | price_old | price_new | url | desc | is_flashsale | auto_post
-    text = update.message.text
-    # remove command prefix
-    payload = text.partition(" ")[2].strip()
-    if not payload:
-        await update.message.reply_text("Format: /tambah Title | Category | price_old | price_new | url | desc | is_flashsale(0/1) | auto_post(0/1)")
-        return
-    parts = [p.strip() for p in payload.split("|")]
-    # allow missing optional fields by padding
-    while len(parts) < 8:
-        parts.append("")
-    title, category, price_old, price_new, url, desc, is_flashsale, auto_post = parts[:8]
     try:
-        price_old_i = int(price_old) if price_old else 0
-        price_new_i = int(price_new) if price_new else 0
-        is_flashsale_i = 1 if is_flashsale == "1" else 0
-        auto_post_i = 1 if auto_post != "0" else 0
-    except Exception:
-        await update.message.reply_text("Pastikan harga berupa angka (tanpa titik/komers). Contoh: 15999000")
-        return
-    created_at = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
-    await db_execute(
-        "INSERT INTO products (title,category,price_old,price_new,url,description,is_flashsale,auto_post,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (title, category, price_old_i, price_new_i, url, desc, is_flashsale_i, auto_post_i, created_at),
-    )
-    await update.message.reply_text("✅ Produk berhasil ditambahkan.")
+        data = " ".join(context.args).split("|")
+        nama, kategori, harga_awal, harga_diskon, link, deskripsi, flashsale, aktif = [d.strip() for d in data]
 
-@admin_only
-async def cmd_lihat_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = await db_execute("SELECT * FROM products ORDER BY created_at DESC", fetch=True)
+        conn = sqlite3.connect("db.sqlite3")
+        cur = conn.cursor()
+        cur.execute("INSERT INTO produk (nama,kategori,harga_awal,harga_diskon,link,deskripsi,flashsale,aktif) VALUES (?,?,?,?,?,?,?,?)",
+                    (nama, kategori, int(harga_awal), int(harga_diskon), link, deskripsi, int(flashsale), int(aktif)))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ Produk '{nama}' berhasil ditambahkan!")
+    except Exception as e:
+        await update.message.reply_text("❌ Format salah.\nGunakan:\n/tambah Nama | Kategori | Harga1 | Harga2 | Link | Deskripsi | 0 | 1")
+        logger.error(e)
+
+# --- Command: Lihat Produk ---
+async def lihat_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    conn = sqlite3.connect("db.sqlite3")
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM produk")
+    rows = cur.fetchall()
+    conn.close()
+
     if not rows:
-        await update.message.reply_text("Belum ada produk.")
+        await update.message.reply_text("❌ Belum ada produk.")
         return
-    txt = "Daftar produk:\n\n"
-    for r in rows:
-        txt += f"ID: {r[0]} | {r[1]} | {r[2]} | Rp {r[4]:,}\n"
-    await update.message.reply_text(txt)
 
-@admin_only
-async def cmd_kirim_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # /kirim_channel {id}
-    parts = update.message.text.split()
-    if len(parts) < 2:
-        await update.message.reply_text("Format: /kirim_channel {id}")
+    text = "\n\n".join([f"{r[0]}. {r[1]} | {r[2]} | Rp {r[4]:,}" for r in rows])
+    await update.message.reply_text(text)
+
+# --- Command: Kirim ke Channel ---
+async def kirim_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
-    pid = parts[1]
+
     try:
-        pid = int(pid)
-    except:
-        await update.message.reply_text("ID harus angka.")
-        return
-    row = await db_execute("SELECT * FROM products WHERE id = ?", (pid,), fetch=True)
-    if not row:
-        await update.message.reply_text("Produk tidak ditemukan.")
-        return
-    row = row[0]
-    txt = format_product_row(row)
-    try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode="Markdown", disable_web_page_preview=False)
+        pid = int(context.args[0])
+        conn = sqlite3.connect("db.sqlite3")
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM produk WHERE id=?", (pid,))
+        p = cur.fetchone()
+        conn.close()
+
+        if not p:
+            await update.message.reply_text("❌ Produk tidak ditemukan.")
+            return
+
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=format_produk(p),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=False
+        )
         await update.message.reply_text("✅ Produk dikirim ke channel.")
     except Exception as e:
-        logger.exception("kirim_channel error")
-        await update.message.reply_text(f"Error mengirim ke channel: {e}")
+        logger.error(e)
 
-@admin_only
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # /broadcast {id}
-    parts = update.message.text.split()
-    if len(parts) < 2:
-        await update.message.reply_text("Format: /broadcast {product_id}")
+# --- Command: Broadcast ---
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
+
     try:
-        pid = int(parts[1])
-    except:
-        await update.message.reply_text("ID produk harus angka.")
-        return
-    row = await db_execute("SELECT * FROM products WHERE id = ?", (pid,), fetch=True)
-    if not row:
-        await update.message.reply_text("Produk tidak ditemukan.")
-        return
-    row = row[0]
-    txt = format_product_row(row)
-    # get users subscribed
-    users = await db_execute("SELECT chat_id FROM users WHERE subscribed=1", fetch=True)
-    if not users:
-        await update.message.reply_text("Tidak ada user yang terdaftar/ter-subscribe.")
-        return
-    sent = 0
-    failed = 0
-    for (chat_id,) in users:
-        try:
-            await context.bot.send_message(chat_id=chat_id, text=txt, parse_mode="Markdown", disable_web_page_preview=False)
-            sent += 1
-            await asyncio.sleep(0.05)  # slight throttle
-        except Exception as e:
-            logger.warning("broadcast to %s failed: %s", chat_id, e)
-            failed += 1
-    await update.message.reply_text(f"Broadcast selesai. Terkirim: {sent}. Gagal: {failed}.")
+        pid = int(context.args[0])
+        conn = sqlite3.connect("db.sqlite3")
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM produk WHERE id=?", (pid,))
+        p = cur.fetchone()
+        conn.close()
 
-# --------- SCHEDULER TASKS ----------
-async def scheduled_broadcast_all(context: ContextTypes.DEFAULT_TYPE):
-    # send top 5 newest products to subscribers
-    rows = await db_execute("SELECT * FROM products ORDER BY created_at DESC LIMIT 5", fetch=True)
+        if not p:
+            await update.message.reply_text("❌ Produk tidak ditemukan.")
+            return
+
+        # Broadcast ke semua user yang pernah start
+        # (contoh: simpan user_id ke DB, belum diimplementasi penuh)
+        await update.message.reply_text("🚧 Broadcast dummy: Fitur DB user bisa ditambah.")
+
+    except Exception as e:
+        logger.error(e)
+
+# --- Command: Promo ---
+async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect("db.sqlite3")
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM produk WHERE aktif=1 LIMIT 5")
+    rows = cur.fetchall()
+    conn.close()
+
     if not rows:
-        logger.info("Scheduled broadcast: no products to send.")
+        await update.message.reply_text("❌ Tidak ada promo.")
         return
-    txts = [format_product_row(r) for r in rows]
-    users = await db_execute("SELECT chat_id FROM users WHERE subscribed=1", fetch=True)
-    if not users:
-        logger.info("Scheduled broadcast: no subscribed users.")
-        return
-    for (chat_id,) in users:
-        for txt in txts:
-            try:
-                await context.bot.send_message(chat_id=chat_id, text=txt, parse_mode="Markdown", disable_web_page_preview=False)
-                await asyncio.sleep(0.05)
-            except Exception as e:
-                logger.warning("scheduled send fail %s: %s", chat_id, e)
 
-# ---------- CALLBACKS ----------
-async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data or ""
-    if data == "promo_now":
-        # call promo
-        await promo_handler(update, context)
-        return
-    if data.startswith("setcat|"):
-        cat = data.split("|", 1)[1]
-        chat_id = q.message.chat.id
-        await db_execute("UPDATE users SET fav_category = ? WHERE chat_id = ?", (cat, chat_id))
-        await q.edit_message_text(f"Kategori favorit disimpan: {cat}")
+    for p in rows:
+        await update.message.reply_text(format_produk(p), parse_mode=ParseMode.HTML, disable_web_page_preview=False)
 
-# ---------- START APP ----------
+# --- Command: Flash Sale ---
+async def flashsale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect("db.sqlite3")
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM produk WHERE flashsale=1 AND aktif=1")
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        await update.message.reply_text("❌ Tidak ada flash sale.")
+        return
+
+    for p in rows:
+        await update.message.reply_text(format_produk(p), parse_mode=ParseMode.HTML)
+
+# --- Jadwal Otomatis (08:00 & 20:00) ---
+async def schedule_jobs(app: Application):
+    async def job():
+        conn = sqlite3.connect("db.sqlite3")
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM produk WHERE aktif=1 LIMIT 1")
+        p = cur.fetchone()
+        conn.close()
+
+        if p:
+            await app.bot.send_message(CHANNEL_ID, text=format_produk(p), parse_mode=ParseMode.HTML)
+
+    aiosched = app.job_queue
+    aiosched.run_daily(job, time(hour=8, minute=0))
+    aiosched.run_daily(job, time(hour=20, minute=0))
+
+# --- Main ---
 async def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN belum di-set.")
-    application = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+    init_db()
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    # handlers
-    application.add_handler(CommandHandler("start", start_handler))
-    application.add_handler(CommandHandler("kategori", kategori_handler))
-    application.add_handler(CommandHandler("promo", promo_handler))
-    application.add_handler(CommandHandler("flashsale", flashsale_handler))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("tambah", tambah))
+    app.add_handler(CommandHandler("lihat_produk", lihat_produk))
+    app.add_handler(CommandHandler("kirim_channel", kirim_channel))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("promo", promo))
+    app.add_handler(CommandHandler("flashsale", flashsale))
 
-    # admin
-    application.add_handler(CommandHandler("tambah", cmd_tambah))
-    application.add_handler(CommandHandler("lihat_produk", cmd_lihat_produk))
-    application.add_handler(CommandHandler("kirim_channel", cmd_kirim_channel))
-    application.add_handler(CommandHandler("broadcast", cmd_broadcast))
-
-    application.add_handler(MessageHandler(filters.ALL & filters.TEXT, lambda u,c: None))  # noop to keep app alive for text
-    application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, lambda u,c: None))
-    application.add_handler(application.callback_query_handler(callback_query_handler))
-
-    # scheduler
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone(TIMEZONE))
-    # two daily broadcasts at 08:00 and 20:00
-    scheduler.add_job(lambda: application.create_task(scheduled_broadcast_all(application.bot)), CronTrigger(hour=8, minute=0))
-    scheduler.add_job(lambda: application.create_task(scheduled_broadcast_all(application.bot)), CronTrigger(hour=20, minute=0))
-    scheduler.start()
-
-    logger.info("Bot starting...")
-    await application.run_polling()
+    await schedule_jobs(app)
+    await app.run_polling()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Stopping...")
+    asyncio.run(main())
