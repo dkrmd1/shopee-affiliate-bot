@@ -1,0 +1,7 @@
+[phases.install]
+cmds = [
+    "pip install python-telegram-bot[webhooks]==20.7 requests"
+]
+
+[start]
+cmd = "python main.py"
