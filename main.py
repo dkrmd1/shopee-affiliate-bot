@@ -17,8 +17,6 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters
 )
 
 # ========== LOGGING ==========
@@ -32,7 +30,7 @@ logger = logging.getLogger(__name__)
 HARDCODED_CONFIG = {
     'BOT_TOKEN': '8324792358:AAGXjXwm1U5cBs5c5Gd8VA3KVtYfxPVSPWA',
     'ADMIN_ID': 1239490619,
-    'CHANNEL_ID': '@promoshopee22a',
+    'CHANNEL_ID': '@promoshopee22a',  # bisa pakai @username atau -100xxxxxxxx
     'CHANNEL_USERNAME': '@promoshopee22a'
 }
 
@@ -177,19 +175,21 @@ async def blast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 👉 [Klik untuk beli]({link})
     """
-    await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=teks,
-        parse_mode="Markdown"
-    )
-    await update.message.reply_text("✅ Produk berhasil diblast ke channel!")
+    try:
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=teks,
+            parse_mode="Markdown"
+        )
+        await update.message.reply_text("✅ Produk berhasil diblast ke channel!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Gagal ngeblast: {e}")
 
 # ========== MAIN ==========
 def main():
     init_db()
 
     try:
-        # hapus webhook
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
         requests.post(url, json={"drop_pending_updates": True}, timeout=10)
         time.sleep(2)
@@ -198,20 +198,24 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # set command menu di telegram (biar muncul di sidebar bot)
-    app.bot.set_my_commands([
-        BotCommand("start", "Mulai bot"),
-        BotCommand("info", "Info bot"),
-        BotCommand("promo", "Lihat promo"),
-        BotCommand("tambah", "Tambah produk (Admin)"),
-        BotCommand("blast", "Blast ke channel (Admin)")
-    ])
-
+    # daftar handler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("promo", promo))
     app.add_handler(CommandHandler("tambah", tambah))
     app.add_handler(CommandHandler("blast", blast))
+
+    # set command menu biar muncul di Telegram
+    async def post_init(application: Application):
+        await application.bot.set_my_commands([
+            BotCommand("start", "Mulai bot"),
+            BotCommand("info", "Info bot"),
+            BotCommand("promo", "Lihat promo"),
+            BotCommand("tambah", "Tambah produk (Admin)"),
+            BotCommand("blast", "Blast ke channel (Admin)")
+        ])
+
+    app.post_init = post_init
 
     app.run_polling()
 
