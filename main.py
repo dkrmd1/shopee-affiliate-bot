@@ -1,4 +1,3 @@
-
 # Bot Shopee Affiliate dengan Channel Publik untuk Railway
 # File: main.py
 
@@ -263,14 +262,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Hai {nama_depan}! Siap hunting promo terbaik hari ini? 🔥
 
 📱 **Menu Utama:**
-• `/promo` - Promo terbaru hari ini
-• `/tambah` - Tambah produk (Admin only)
-• `/blast` - Blast semua produk ke channel (Admin only)
-• `/info` - Info bot
+• 🔥 **Promo Hari Ini** - Update terbaru
+• 🏷️ **Kategori Produk** - Filter by kategori
+• ⚡ **Flash Sale** - Diskon gila-gilaan  
+• 📦 **Stok Terbatas** - Buruan sebelum habis!
 
 🔔 **Bot Status:** ✅ ONLINE
+📢 **Channel:** {CHANNEL_USERNAME}
 
-Ketik `/promo` untuk mulai belanja hemat! 🛒
+Pilih menu di bawah untuk mulai belanja hemat! 🛒
         """
         
         keyboard = [
