@@ -426,8 +426,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle semua pesan text yang tidak match dengan commands"""
     try:
+        # Cek apakah update dan objek yang diperlukan ada
+        if not update or not update.effective_user or not update.message:
+            logger.warning("Update object is incomplete")
+            return
+            
         user_id = update.effective_user.id
-        message_text = update.message.text.lower()
+        message_text = update.message.text
+        
+        # Cek apakah message_text ada
+        if not message_text:
+            return
+            
+        message_text = message_text.lower()
         
         # Update user activity
         await update_user_activity(user_id)
@@ -436,36 +447,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(word in message_text for word in ['halo', 'hai', 'hello', 'hi']):
             await update.message.reply_text(
                 "👋 Halo! Selamat datang di Bot Promo Shopee!\n\n"
-                "Ketik `/start` untuk melihat menu utama atau\n"
-                "Ketik `/promo` untuk melihat promo hari ini! 🛒"
+                "Ketik /start untuk melihat menu utama atau\n"
+                "Ketik /promo untuk melihat promo hari ini! 🛒"
             )
         elif any(word in message_text for word in ['promo', 'diskon', 'murah']):
             await update.message.reply_text(
-                "🔥 Mau lihat promo terbaru? Ketik `/promo` ya!\n\n"
+                "🔥 Mau lihat promo terbaru? Ketik /promo ya!\n\n"
                 "Ada banyak produk dengan diskon gila-gilaan! 🛍️"
             )
         elif any(word in message_text for word in ['help', 'bantuan']):
             await update.message.reply_text(
                 "🤖 **Bantuan Bot Shopee**\n\n"
                 "**Commands yang tersedia:**\n"
-                "• `/start` - Menu utama\n"
-                "• `/promo` - Lihat promo hari ini\n"
-                "• `/info` - Info tentang bot\n\n"
+                "• /start - Menu utama\n"
+                "• /promo - Lihat promo hari ini\n"
+                "• /info - Info tentang bot\n\n"
                 "Butuh bantuan lain? Chat admin ya! 😊",
                 parse_mode='Markdown'
             )
         else:
             await update.message.reply_text(
                 "🤔 Maaf, saya tidak mengerti pesan Anda.\n\n"
-                "Coba ketik `/start` untuk melihat menu atau\n"
-                "`/promo` untuk melihat promo terbaru! 🛒"
+                "Coba ketik /start untuk melihat menu atau\n"
+                "/promo untuk melihat promo terbaru! 🛒"
             )
             
     except Exception as e:
         logger.error(f"Error in handle_message: {e}")
-        await update.message.reply_text(
-            "❌ Terjadi error. Silakan coba lagi atau gunakan `/start`"
-        )
+        # Cek apakah update.message masih ada sebelum mencoba reply
+        if update and update.message:
+            try:
+                await update.message.reply_text(
+                    "❌ Terjadi error. Silakan coba lagi atau gunakan /start"
+                )
+            except:
+                # Jika reply gagal, log saja
+                logger.error("Failed to send error message to user")
 
 # === ERROR HANDLER ===
 
@@ -510,6 +527,9 @@ def main():
         # Callback handlers
         application.add_handler(CallbackQueryHandler(callback_handler))
         
+        # Photo handler untuk gambar produk
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        
         # Message handler untuk handle semua text messages
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
@@ -522,21 +542,9 @@ def main():
         logger.info(f"🌐 Port: {port}")
         logger.info(f"🌐 App URL: {app_name}")
         
-        if app_name and app_name != 'localhost':
-            # Production mode dengan webhook
-            webhook_url = f"https://{app_name}/{BOT_TOKEN}"
-            logger.info(f"🔗 Starting webhook mode at: {webhook_url}")
-            
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=port,
-                url_path=BOT_TOKEN,
-                webhook_url=webhook_url
-            )
-        else:
-            # Development mode dengan polling
-            logger.info("🔄 Starting polling mode (development)")
-            application.run_polling(drop_pending_updates=True)
+        # Always use polling for now (simpler and more reliable)
+        logger.info("🔄 Starting polling mode")
+        application.run_polling(drop_pending_updates=True)
             
     except Exception as e:
         logger.error(f"💥 Critical error starting bot: {e}")
