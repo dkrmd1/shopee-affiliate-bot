@@ -6,6 +6,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional
+import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import (
@@ -54,7 +55,7 @@ class ShopeeAffiliateBot:
             conn = sqlite3.connect('shopee_affiliate.db', check_same_thread=False)
             cursor = conn.cursor()
             
-            # Tabel produk
+            # Tabel produk - UPDATED with gambar_url
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS produk (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +153,69 @@ async def update_user_activity(user_id: int, subscribe_status: bool = None):
     except Exception as e:
         logger.error(f"Error updating user activity: {e}")
 
+async def kirim_ke_channel(context: ContextTypes.DEFAULT_TYPE, produk_data: dict) -> bool:
+    """Kirim produk baru ke channel"""
+    try:
+        nama = produk_data['nama']
+        harga_asli = produk_data['harga_asli']
+        harga_promo = produk_data['harga_promo']
+        diskon_persen = produk_data['diskon_persen']
+        link_affiliate = produk_data['link_affiliate']
+        deskripsi = produk_data['deskripsi']
+        gambar_url = produk_data.get('gambar_url')
+        stok_terbatas = produk_data.get('stok_terbatas', False)
+        flash_sale = produk_data.get('flash_sale', False)
+        
+        # Format pesan untuk channel
+        harga_asli_format = format_rupiah(harga_asli)
+        harga_promo_format = format_rupiah(harga_promo)
+        hemat = format_rupiah(harga_asli - harga_promo)
+        
+        pesan_channel = f"""🔥 **PROMO SHOPEE HARI INI** 🔥
+
+📱 **{nama}**
+
+💰 ~~{harga_asli_format}~~ → **{harga_promo_format}**
+🏷️ **HEMAT {diskon_persen}%** ({hemat})"""
+
+        if flash_sale:
+            pesan_channel += f"\n⚡ **FLASH SALE!**"
+        
+        if stok_terbatas:
+            pesan_channel += f"\n⚠️ **Stok Terbatas!**"
+        
+        if deskripsi:
+            pesan_channel += f"\n\n📝 {deskripsi}"
+        
+        pesan_channel += f"\n\n[🛒 **BELI SEKARANG**]({link_affiliate})"
+        pesan_channel += f"\n\n📢 Channel: {CHANNEL_USERNAME}"
+        pesan_channel += f"\n📅 {datetime.now().strftime('%d %B %Y')}"
+        
+        # Kirim ke channel
+        if gambar_url and gambar_url.strip():
+            # Kirim dengan gambar
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=gambar_url,
+                caption=pesan_channel,
+                parse_mode='Markdown'
+            )
+        else:
+            # Kirim tanpa gambar
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=pesan_channel,
+                parse_mode='Markdown',
+                disable_web_page_preview=False
+            )
+        
+        logger.info(f"✅ Produk '{nama}' berhasil dikirim ke channel {CHANNEL_ID}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error mengirim ke channel: {e}")
+        return False
+
 # === COMMAND HANDLERS ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,6 +264,7 @@ Hai {nama_depan}! Siap hunting promo terbaik hari ini? 🔥
 📱 **Menu Utama:**
 • `/promo` - Promo terbaru hari ini
 • `/tambah` - Tambah produk (Admin only)
+• `/blast` - Blast semua produk ke channel (Admin only)
 • `/info` - Info bot
 
 🔔 **Bot Status:** ✅ ONLINE
@@ -241,8 +306,9 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/promo` - Lihat promo
 • `/info` - Info bot
 • `/tambah` - Tambah produk (Admin only)
+• `/blast` - Blast ke channel (Admin only)
 
-📅 **Build:** September 2025
+📅 **Build:** September 2025 - Fixed Version
         """
         
         await update.message.reply_text(pesan_info, parse_mode='Markdown')
@@ -253,13 +319,24 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler untuk command /promo"""
     try:
+        # Handle both message and callback query
+        if hasattr(update, 'callback_query') and update.callback_query:
+            message = update.callback_query.message
+            user_id = update.callback_query.from_user.id
+        else:
+            message = update.message
+            user_id = update.effective_user.id
+        
+        # Update user activity
+        await update_user_activity(user_id)
+        
         conn = sqlite3.connect('shopee_affiliate.db', check_same_thread=False)
         cursor = conn.cursor()
         
         # Ambil promo aktif hari ini
         cursor.execute('''
             SELECT nama, harga_asli, harga_promo, diskon_persen, 
-                   link_affiliate, deskripsi, stok_terbatas
+                   link_affiliate, deskripsi, stok_terbatas, gambar_url
             FROM produk 
             WHERE aktif = 1 
             ORDER BY diskon_persen DESC 
@@ -270,7 +347,7 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         if not produk_list:
-            await update.message.reply_text(
+            await message.reply_text(
                 "🤔 **Belum ada promo hari ini.**\n\n"
                 "Admin sedang update promo terbaru! \n"
                 "Gunakan `/tambah` untuk menambah produk (admin only)",
@@ -281,7 +358,7 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pesan = "🔥 **PROMO SHOPEE HARI INI** 🔥\n\n"
         pesan += f"📅 *{datetime.now().strftime('%d %B %Y')}*\n\n"
         
-        for i, (nama, harga_asli, harga_promo, diskon, link, desc, stok_terbatas) in enumerate(produk_list, 1):
+        for i, (nama, harga_asli, harga_promo, diskon, link, desc, stok_terbatas, gambar_url) in enumerate(produk_list, 1):
             harga_asli_format = format_rupiah(harga_asli)
             harga_promo_format = format_rupiah(harga_promo)
             hemat = format_rupiah(harga_asli - harga_promo)
@@ -300,7 +377,7 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         pesan += f"📢 **Channel:** {CHANNEL_USERNAME}"
         
-        await update.message.reply_text(
+        await message.reply_text(
             pesan, 
             parse_mode='Markdown', 
             disable_web_page_preview=True
@@ -308,21 +385,24 @@ async def promo_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error in promo_hari_ini: {e}")
-        await update.message.reply_text("❌ Terjadi error saat mengambil data promo.")
+        if hasattr(update, 'callback_query') and update.callback_query:
+            await update.callback_query.message.reply_text("❌ Terjadi error saat mengambil data promo.")
+        else:
+            await update.message.reply_text("❌ Terjadi error saat mengambil data promo.")
 
 # === ADMIN COMMANDS ===
 
 async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command admin untuk menambah produk"""
+    """Command admin untuk menambah produk - UPDATED with image support"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Command ini hanya untuk admin!")
         return
     
     if not context.args:
         contoh_format = """
-📝 **Format Tambah Produk:**
+📝 **Format Tambah Produk (UPDATED):**
 
-`/tambah iPhone 15 Pro | Elektronik | 15999000 | 12999000 | https://shopee.co.id/xxx?af_siteid=123 | Garansi resmi iBox 1 tahun | 1 | 1`
+`/tambah iPhone 15 Pro | Elektronik | 15999000 | 12999000 | https://shopee.co.id/xxx?af_siteid=123 | Garangan resmi iBox 1 tahun | https://image.url/iphone.jpg | 1 | 1`
 
 **Keterangan:**
 1. Nama Produk
@@ -331,10 +411,14 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 4. Harga Promo
 5. Link Affiliate
 6. Deskripsi
-7. Stok Terbatas (0/1)
-8. Flash Sale (0/1)
+7. **URL Gambar** (BARU!)
+8. Stok Terbatas (0/1)
+9. Flash Sale (0/1)
 
 **Pisahkan dengan tanda | (pipe)**
+
+**CONTOH dengan GAMBAR:**
+`/tambah Sepatu Nike | Fashion | 1500000 | 999000 | https://shopee.co.id/xxx | Sepatu running original | https://example.com/sepatu.jpg | 1 | 0`
         """
         await update.message.reply_text(contoh_format, parse_mode='Markdown')
         return
@@ -342,8 +426,8 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data_produk = ' '.join(context.args).split('|')
         
-        if len(data_produk) < 6:
-            raise ValueError("Data tidak lengkap! Minimal 6 kolom.")
+        if len(data_produk) < 7:  # Updated minimum requirement
+            raise ValueError("Data tidak lengkap! Minimal 7 kolom (termasuk URL gambar).")
         
         nama = data_produk[0].strip()
         kategori = data_produk[1].strip()
@@ -351,26 +435,42 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         harga_promo = int(data_produk[3].strip())
         link_affiliate = data_produk[4].strip()
         deskripsi = data_produk[5].strip()
-        stok_terbatas = bool(int(data_produk[6].strip())) if len(data_produk) > 6 else False
-        flash_sale = bool(int(data_produk[7].strip())) if len(data_produk) > 7 else False
+        gambar_url = data_produk[6].strip() if len(data_produk) > 6 and data_produk[6].strip() else None
+        stok_terbatas = bool(int(data_produk[7].strip())) if len(data_produk) > 7 else False
+        flash_sale = bool(int(data_produk[8].strip())) if len(data_produk) > 8 else False
         
         # Hitung diskon
         diskon_persen = hitung_diskon(harga_asli, harga_promo)
         
-        # Simpan ke database
+        # Simpan ke database - UPDATED with gambar_url
         conn = sqlite3.connect('shopee_affiliate.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO produk (nama, kategori, harga_asli, harga_promo, 
-                              diskon_persen, link_affiliate, deskripsi, 
+                              diskon_persen, link_affiliate, gambar_url, deskripsi, 
                               stok_terbatas, flash_sale)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (nama, kategori, harga_asli, harga_promo, diskon_persen, 
-              link_affiliate, deskripsi, stok_terbatas, flash_sale))
+              link_affiliate, gambar_url, deskripsi, stok_terbatas, flash_sale))
         
         produk_id = cursor.lastrowid
         conn.commit()
         conn.close()
+        
+        # Auto blast ke channel
+        produk_data = {
+            'nama': nama,
+            'harga_asli': harga_asli,
+            'harga_promo': harga_promo,
+            'diskon_persen': diskon_persen,
+            'link_affiliate': link_affiliate,
+            'deskripsi': deskripsi,
+            'gambar_url': gambar_url,
+            'stok_terbatas': stok_terbatas,
+            'flash_sale': flash_sale
+        }
+        
+        blast_success = await kirim_ke_channel(context, produk_data)
         
         # Konfirmasi berhasil
         harga_asli_format = format_rupiah(harga_asli)
@@ -384,8 +484,10 @@ async def tambah_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🏷️ **Kategori:** {kategori}
 💰 **Harga:** ~~{harga_asli_format}~~ → **{harga_promo_format}**
 🔥 **Diskon:** {diskon_persen}%
+🖼️ **Gambar:** {'Ada' if gambar_url else 'Tidak ada'}
 ⚡ **Flash Sale:** {'Ya' if flash_sale else 'Tidak'}
 ⚠️ **Stok Terbatas:** {'Ya' if stok_terbatas else 'Tidak'}
+📢 **Blast ke Channel:** {'✅ Berhasil' if blast_success else '❌ Gagal'}
 
 Gunakan `/promo` untuk melihat semua produk.
         """
@@ -400,6 +502,80 @@ Gunakan `/promo` untuk melihat semua produk.
             parse_mode='Markdown'
         )
 
+async def blast_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command admin untuk blast semua produk aktif ke channel"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Command ini hanya untuk admin!")
+        return
+    
+    try:
+        await update.message.reply_text("🚀 **Memulai blast ke channel...**", parse_mode='Markdown')
+        
+        conn = sqlite3.connect('shopee_affiliate.db', check_same_thread=False)
+        cursor = conn.cursor()
+        
+        # Ambil semua produk aktif
+        cursor.execute('''
+            SELECT nama, harga_asli, harga_promo, diskon_persen, 
+                   link_affiliate, deskripsi, gambar_url, stok_terbatas, flash_sale
+            FROM produk 
+            WHERE aktif = 1 
+            ORDER BY diskon_persen DESC
+        ''')
+        
+        produk_list = cursor.fetchall()
+        conn.close()
+        
+        if not produk_list:
+            await update.message.reply_text("❌ Tidak ada produk aktif untuk di-blast!")
+            return
+        
+        success_count = 0
+        failed_count = 0
+        
+        for produk_row in produk_list:
+            nama, harga_asli, harga_promo, diskon_persen, link_affiliate, deskripsi, gambar_url, stok_terbatas, flash_sale = produk_row
+            
+            produk_data = {
+                'nama': nama,
+                'harga_asli': harga_asli,
+                'harga_promo': harga_promo,
+                'diskon_persen': diskon_persen,
+                'link_affiliate': link_affiliate,
+                'deskripsi': deskripsi,
+                'gambar_url': gambar_url,
+                'stok_terbatas': stok_terbatas,
+                'flash_sale': flash_sale
+            }
+            
+            if await kirim_ke_channel(context, produk_data):
+                success_count += 1
+            else:
+                failed_count += 1
+            
+            # Delay untuk menghindari rate limit
+            await asyncio.sleep(2)
+        
+        pesan_hasil = f"""
+✅ **Blast selesai!**
+
+📊 **Hasil:**
+• Berhasil: {success_count} produk
+• Gagal: {failed_count} produk
+• Total: {len(produk_list)} produk
+
+📢 Channel: {CHANNEL_USERNAME}
+        """
+        
+        await update.message.reply_text(pesan_hasil, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in blast_channel: {e}")
+        await update.message.reply_text(
+            f"❌ **Error saat blast:** {str(e)}",
+            parse_mode='Markdown'
+        )
+
 # === CALLBACK HANDLERS ===
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,14 +585,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if query.data == "promo_hari_ini":
-            # Redirect ke function promo_hari_ini
-            # Update the update object to use query.message
-            new_update = Update(
-                update_id=update.update_id,
-                message=query.message,
-                callback_query=None
-            )
-            await promo_hari_ini(new_update, context)
+            # Call promo_hari_ini with callback query update
+            await promo_hari_ini(update, context)
         
     except Exception as e:
         logger.error(f"Error in callback_handler: {e}")
@@ -446,14 +616,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Auto-reply untuk pesan umum
         if any(word in message_text for word in ['halo', 'hai', 'hello', 'hi']):
             await update.message.reply_text(
-                "👋 Halo! Selamat datang di Bot Promo Shopee!\n\n"
-                "Ketik /start untuk melihat menu utama atau\n"
-                "Ketik /promo untuk melihat promo hari ini! 🛒"
+                "👋 **Halo! Selamat datang di Bot Promo Shopee!**\n\n"
+                "🔥 Ketik /start untuk melihat menu utama atau\n"
+                "🛒 Ketik /promo untuk melihat promo hari ini!\n\n"
+                "📢 Jangan lupa join channel: " + CHANNEL_USERNAME,
+                parse_mode='Markdown'
             )
         elif any(word in message_text for word in ['promo', 'diskon', 'murah']):
             await update.message.reply_text(
-                "🔥 Mau lihat promo terbaru? Ketik /promo ya!\n\n"
-                "Ada banyak produk dengan diskon gila-gilaan! 🛍️"
+                "🔥 **Mau lihat promo terbaru?**\n\n"
+                "Ketik /promo ya! Ada banyak produk dengan diskon gila-gilaan! 🛍️\n\n"
+                "📢 Channel: " + CHANNEL_USERNAME,
+                parse_mode='Markdown'
             )
         elif any(word in message_text for word in ['help', 'bantuan']):
             await update.message.reply_text(
@@ -462,14 +636,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• /start - Menu utama\n"
                 "• /promo - Lihat promo hari ini\n"
                 "• /info - Info tentang bot\n\n"
+                "📢 **Channel Promo:** " + CHANNEL_USERNAME + "\n\n"
                 "Butuh bantuan lain? Chat admin ya! 😊",
                 parse_mode='Markdown'
             )
-        else:
+        elif any(word in message_text for word in ['terima kasih', 'thanks', 'makasih']):
             await update.message.reply_text(
-                "🤔 Maaf, saya tidak mengerti pesan Anda.\n\n"
-                "Coba ketik /start untuk melihat menu atau\n"
-                "/promo untuk melihat promo terbaru! 🛒"
+                "🙏 **Sama-sama!**\n\n"
+                "Senang bisa membantu! Jangan lupa cek promo terbaru dengan ketik /promo ya! 🛒\n\n"
+                "📢 Join channel: " + CHANNEL_USERNAME,
+                parse_mode='Markdown'
+            )
+        else:
+            # Response default yang lebih helpful
+            await update.message.reply_text(
+                "🤔 **Hai!** Saya tidak mengerti pesan Anda.\n\n"
+                "🔥 **Coba ketik:**\n"
+                "• `/start` - Menu utama\n"
+                "• `/promo` - Promo terbaru\n"
+                "• `halo` - Sapaan\n"
+                "• `bantuan` - Help\n\n"
+                "📢 **Channel Promo:** " + CHANNEL_USERNAME,
+                parse_mode='Markdown'
             )
             
     except Exception as e:
@@ -478,7 +666,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update and update.message:
             try:
                 await update.message.reply_text(
-                    "❌ Terjadi error. Silakan coba lagi atau gunakan /start"
+                    "❌ **Terjadi error.**\n\nSilakan coba lagi atau gunakan /start",
+                    parse_mode='Markdown'
                 )
             except:
                 # Jika reply gagal, log saja
@@ -523,6 +712,7 @@ def main():
         
         # Admin Commands
         application.add_handler(CommandHandler("tambah", tambah_produk))
+        application.add_handler(CommandHandler("blast", blast_channel))
         
         # Callback handlers
         application.add_handler(CallbackQueryHandler(callback_handler))
